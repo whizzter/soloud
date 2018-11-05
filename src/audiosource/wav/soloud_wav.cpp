@@ -29,6 +29,7 @@ freely, subject to the following restrictions:
 #include "soloud_wav.h"
 #include "soloud_file.h"
 #include "stb_vorbis.h"
+#include "dr_mp3.h"
 
 namespace SoLoud
 {
@@ -227,6 +228,47 @@ namespace SoLoud
 		return 0;
 	}
 
+	result Wav::loadmp3(MemoryFile *aReader)
+	{
+		drmp3 decoder;
+
+		if (!drmp3_init_memory(&decoder,aReader->getMemPtr(), aReader->length(), NULL))
+		{
+			return FILE_LOAD_FAILED;
+		}
+
+		drmp3_uint64 samples=drmp3_read_f32(&decoder,((drmp3_uint64)1)<<62,NULL);
+		if (!samples)
+		{
+			drmp3_uninit(&decoder);
+			return FILE_LOAD_FAILED;
+		}
+
+		mData = new float[(unsigned int)(samples * decoder.channels)];
+		mBaseSamplerate = (float)decoder.sampleRate;
+		mSampleCount = (unsigned int)samples;
+		mChannels = decoder.channels;
+
+		drmp3_seek_to_frame(&decoder, 0);
+
+		for (unsigned int i=0;i<mSampleCount;i+=512) {
+			float tmp[512 * 2];
+			unsigned int blockSize = (mSampleCount - i) > 512 ? 512 : mSampleCount-i;
+
+			drmp3_read_f32(&decoder,blockSize,tmp);
+
+			for (unsigned int j=0;j<blockSize;j++) {
+				for (unsigned int k=0;k<decoder.channels;k++) {
+					mData[k*mSampleCount + i + j]=tmp[j*decoder.channels+k];
+				}
+			}
+		}
+
+		drmp3_uninit(&decoder);
+
+		return 0;
+	}
+
 	result Wav::loadogg(MemoryFile *aReader)
 	{	
 		int e = 0;
@@ -285,13 +327,13 @@ namespace SoLoud
 		if (tag == MAKEDWORD('O','g','g','S')) 
         {
 			return loadogg(aReader);
-
 		} 
         else if (tag == MAKEDWORD('R','I','F','F')) 
         {
 			return loadwav(aReader);
 		}
-		return FILE_LOAD_FAILED;
+		// mp3 files are tried last since detecting one requires a huge bit of logic already present in the decoder
+		return loadmp3(aReader);
     }
 
 	result Wav::load(const char *aFilename)
